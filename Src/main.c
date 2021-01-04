@@ -1,3 +1,51 @@
+
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * This notice applies to any and all portions of this file
+  * that are not between comment pairs USER CODE BEGIN and
+  * USER CODE END. Other portions of this file, whether 
+  * inserted by the user or by software development tools
+  * are owned by their respective copyright owners.
+  *
+  * Copyright (c) 2019 STMicroelectronics International N.V. 
+  * All rights reserved.
+  *
+  * Redistribution and use in source and binary forms, with or without 
+  * modification, are permitted, provided that the following conditions are met:
+  *
+  * 1. Redistribution of source code must retain the above copyright notice, 
+  *    this list of conditions and the following disclaimer.
+  * 2. Redistributions in binary form must reproduce the above copyright notice,
+  *    this list of conditions and the following disclaimer in the documentation
+  *    and/or other materials provided with the distribution.
+  * 3. Neither the name of STMicroelectronics nor the names of other 
+  *    contributors to this software may be used to endorse or promote products 
+  *    derived from this software without specific written permission.
+  * 4. This software, including modifications and/or derivative works of this 
+  *    software, must execute solely and exclusively on microcontroller or
+  *    microprocessor devices manufactured by or for STMicroelectronics.
+  * 5. Redistribution and use of this software other than as permitted under 
+  *    this license is void and will automatically terminate your rights under 
+  *    this license. 
+  *
+  * THIS SOFTWARE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS "AS IS" 
+  * AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT 
+  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
+  * PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY
+  * RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT 
+  * SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+  * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, 
+  * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF 
+  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING 
+  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  ******************************************************************************
+  */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f1xx_hal.h"
@@ -18,6 +66,7 @@ I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim6;
+TIM_HandleTypeDef htim7;
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
@@ -30,6 +79,8 @@ uint8_t ReceivedDataFlag = 0; // Flaga informujaca o odebraniu danych
 
 _Bool TesterMode = 0; //tester mode - 0 = PC Mode
 _Bool NormalTestFlag = 0; // =1, if normal test in progres
+volatile _Bool timeOnMeasureMode; //1->measuring switch on time
+volatile _Bool timeOffMeasureMode;//1->measuring switch off time
 
 float CoilVoltage,PWMVoltage,DifVoltage,CurrentMeas;  //Measured values float
 float CoilVoltageSetFl,PWMVoltageSetFl; 									 //Settings Value Float
@@ -42,6 +93,7 @@ uint32_t adc[5][101],adcbuffer[5]; //adc - measured adc 0-4w data
 float adcConverted[4],adcRaw[4];
 uint32_t adcTemperature;
 uint16_t min=5000,max=0;
+volatile uint32_t countTime = 0;
 
 uint8_t ssf = 10;
 uint8_t sempIndex=0;
@@ -49,8 +101,12 @@ uint8_t sempIndex=0;
 uint8_t selfCalibration=0;
 uint8_t selfCalibCheck = 0;
 
+uint32_t currTemp = 0; //delete it
+uint32_t adcRawCurrent = 0;
+
 int temperature = 0;
 char Temp[18];
+char LCDMessage[2][16],LCDMessageCurr[2][16];
 
 /* USER CODE END PV */
 
@@ -63,6 +119,7 @@ static void MX_I2C1_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM7_Init(void);
 
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
                                 
@@ -80,6 +137,11 @@ void RelOn(uint8_t RelNum);
 void DioOff(uint8_t DioNum);
 void RelOff(uint8_t RelNum);
 void ConvertData(void);
+void sampleCurrent (void);
+
+uint32_t OnLimit =2950; //if current from ADC < OnLimit -> relay is ON
+uint32_t OffLimit=2950; //if current from ADC > OnLimit -> relay is OFF 
+
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
@@ -141,6 +203,7 @@ int main(void)
   MX_TIM6_Init();
   MX_ADC1_Init();
   MX_TIM1_Init();
+  MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
 	HAL_TIM_PWM_Start(&htim3,TIM_CHANNEL_2);
 	__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,32);
@@ -151,15 +214,18 @@ int main(void)
 	HAL_TIM_Base_Start(&htim6);
 	HAL_TIM_Base_Start_IT(&htim6);
 	
-	
-	
 	LCDInit(0x40);
 	HAL_Delay(100);
 	
 	LCDPrint("  Relay Tester  ");
 	SecString();
-	LCDPrint("    Rev: 1.1    ");
-	HAL_Delay(2000);
+	LCDPrint("    Rev: 2.0    ");
+	HAL_Delay(1500);
+	FirstString();
+	LCDPrint("  Designed by:  ");
+	SecString();
+	LCDPrint("Ivan  Perehiniak");
+	HAL_Delay(1000);
 	//LCDClear();
 	
 	HAL_ADC_Start_DMA(&hadc1,adcbuffer,5);
@@ -173,7 +239,16 @@ int main(void)
 		if(ReceivedDataFlag == 1 && selfCalibration!=1)//&& NormalTestFlag == 0		
 		{
 				__HAL_TIM_SET_COUNTER(&htim6,0);
+			  if((StrCmp(ReceivedData,"$")>0 || StrCmp(ReceivedData,"@")>0) && StrCmp(ReceivedData,"$AllOFF")==0)
+					{
+					sprintf(LCDMessage[0],"Test in progress");
+					}
 				if(StrCmp(ReceivedData,"Who are you")>0)
+					{
+					sprintf(LCDMessage[0],"  Wrong PC App  ");
+					TesterMode = 1;
+					}
+				if(StrCmp(ReceivedData,"WhoAreYou")>0)
 					{
 					CDC_Transmit_String("I am Tester,Relay Tester");
 					TesterMode = 1;
@@ -229,7 +304,7 @@ int main(void)
 				else if(StrCmp(ReceivedData,"$RelOFF")>0)
 					{ 
 					RelOff(StrToInt(ReceivedData));	
-					sprintf(Temp,"$RelOn%u", StrToInt(ReceivedData));	
+					sprintf(Temp,"$RelOff%u", StrToInt(ReceivedData));	
 					CDC_Transmit_String(Temp);
 					}
 				else if(StrCmp(ReceivedData,"@GetCurrentOFF")>0)
@@ -247,7 +322,7 @@ int main(void)
 				else if(StrCmp(ReceivedData,"@GetCurrentON")>0)
 					{ 
 					ConvertData();
-					sprintf(Temp,"@CurrentON%.*f",4, adcConverted[3]);	
+					sprintf(Temp,"@CurrentON%.*f",4, adcConverted[3]);
 					CDC_Transmit_String(Temp);
 					}
 				else if(StrCmp(ReceivedData,"@GetVoltageON")>0)
@@ -256,9 +331,48 @@ int main(void)
 					sprintf(Temp,"@VoltageON%.*f",4, adcConverted[2]);	
 					CDC_Transmit_String(Temp);
 					}	
+				else if(StrCmp(ReceivedData,"@RelTimeON")>0) //turn rel on and measure time
+					{ 
+					sampleCurrent();
+					countTime = 0;
+					RelOn(StrToInt(ReceivedData));
+					for(uint32_t i =0; i < 10000 ; i++)
+						{
+							if(adcRawCurrent<OnLimit)
+							{
+								countTime=i;
+								i = 10000;
+							}
+							else sampleCurrent();
+						}
+					if (adcRawCurrent<OnLimit)sprintf(Temp,"@RelTimeON%u",countTime);	
+					else sprintf(Temp,"@RelTimeON%u",adcRawCurrent+10001);	
+					CDC_Transmit_String(Temp);
+					countTime = 0;
+					}
+			 else if(StrCmp(ReceivedData,"@RelTimeOFF")>0) //turn rel on and measure time
+					{ 
+					sampleCurrent();
+					countTime = 0;
+					RelOff(StrToInt(ReceivedData));
+					for(uint32_t i =0; i < 10000 ; i++)
+						{
+							if(adcRawCurrent>OffLimit)
+							{
+								countTime=i;
+								i = 10000;
+							}
+							else sampleCurrent();
+						}
+					if (adcRawCurrent>OffLimit)sprintf(Temp,"@RelTimeOFF%u",countTime);	
+					else sprintf(Temp,"@RelTimeOFF%u",adcRawCurrent+10001);	
+					CDC_Transmit_String(Temp);
+					countTime = 0;
+					}
 				else if(StrCmp(ReceivedData,"$AllOFF")>0)   // Turn All Dio, Relays after last step
 					{
 					AllOff();
+					sprintf(LCDMessage[0]," Test completed ");
 					}
 					
 			ReceivedDataFlag = 0;
@@ -268,6 +382,8 @@ int main(void)
 		
 	if (selfCalibration == 1)
 	{
+		sprintf(LCDMessage[0],"Self Calibration");
+		sprintf(LCDMessage[1],"Coil Volt.=%.*f",2, adcConverted[0]);
 		if ((adcConverted[0]-1) >= CoilVoltageSetFl && CoilVoltageSet > 16)
 		{
 		selfCalibCheck = 0;
@@ -307,30 +423,16 @@ int main(void)
 		}
 	}		
 				
-	if(TesterMode == 0)
+	if(TesterMode == 0 || StrCmp(ReceivedData,"$SetRelCurrent"))
 	{
-	ConvertData();
-	FirstString();
-	
-	sprintf(Temp,"a2=%.*f",2, adcConverted[2]);
-	LCDPrint(Temp);
+		ConvertData();
+		FirstString();
+		LCDPrint(LCDMessage[0]);
+		SecString();
+		LCDPrint(LCDMessage[1]);
 
-	sprintf(Temp," a3=%.*f   ",2, adcConverted[3]);
-	LCDPrint(Temp);
-		
-	SecString();
-	temperature = (1750-adcTemperature)/5+25;
-	sprintf(Temp,"%d", temperature);
-	LCDPrint(Temp);
-		
-	sprintf(Temp," %.*f",2, adcConverted[0]);
-	LCDPrint(Temp);
-	
-	sprintf(Temp," %.*i",2, CoilVoltageSet); //adcConverted[1]
-	LCDPrint(Temp);
-	
-	HAL_Delay(50);
-}
+		HAL_Delay(50);
+	}
 }	
 
   /* USER CODE END WHILE */
@@ -341,7 +443,6 @@ int main(void)
   /* USER CODE END 3 */
 
 }
-
 
 /**
   * @brief System Clock Configuration
@@ -608,6 +709,31 @@ static void MX_TIM6_Init(void)
 
 }
 
+/* TIM7 init function */
+static void MX_TIM7_Init(void)
+{
+
+  TIM_MasterConfigTypeDef sMasterConfig;
+
+  htim7.Instance = TIM7;
+  htim7.Init.Prescaler = 0;
+  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim7.Init.Period = 72;
+  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim7, &sMasterConfig) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+}
+
 /** 
   * Enable DMA controller clock
   */
@@ -772,6 +898,7 @@ uint8_t StrCmp (char* Buf,char* cmpBuf)
 void AllOff(void)
 {
 DioOff(200);
+RelOff(200);
 __HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,0);
 }
 
@@ -895,6 +1022,16 @@ void ConvertData (void)
 	adcConverted[3] = ((3017-adcRaw[3])/230)-0.015;
 }
 
+void sampleCurrent (void)
+{		
+	  uint32_t adcSum = 0;
+
+		for(uint8_t ind = 0; ind<20;ind++)
+		 {
+			adcSum = adcSum+adc[3][ind*5];
+		 }	
+		adcRawCurrent = adcSum/20;
+}
 
 /* USER CODE END 4 */
 

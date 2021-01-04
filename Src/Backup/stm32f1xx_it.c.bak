@@ -294,9 +294,7 @@ void TIM6_IRQHandler(void)
 	if(TesterMode == 1)
 		{
 		TesterMode = 0;
-		AllOff();
-		LCDClear();
-		LCDCursorPozition(1,0);
+		//AllOff();
 		}
   /* USER CODE END TIM6_IRQn 1 */
 }

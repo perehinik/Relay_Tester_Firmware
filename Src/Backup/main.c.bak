@@ -1,51 +1,3 @@
-
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * This notice applies to any and all portions of this file
-  * that are not between comment pairs USER CODE BEGIN and
-  * USER CODE END. Other portions of this file, whether 
-  * inserted by the user or by software development tools
-  * are owned by their respective copyright owners.
-  *
-  * Copyright (c) 2018 STMicroelectronics International N.V. 
-  * All rights reserved.
-  *
-  * Redistribution and use in source and binary forms, with or without 
-  * modification, are permitted, provided that the following conditions are met:
-  *
-  * 1. Redistribution of source code must retain the above copyright notice, 
-  *    this list of conditions and the following disclaimer.
-  * 2. Redistributions in binary form must reproduce the above copyright notice,
-  *    this list of conditions and the following disclaimer in the documentation
-  *    and/or other materials provided with the distribution.
-  * 3. Neither the name of STMicroelectronics nor the names of other 
-  *    contributors to this software may be used to endorse or promote products 
-  *    derived from this software without specific written permission.
-  * 4. This software, including modifications and/or derivative works of this 
-  *    software, must execute solely and exclusively on microcontroller or
-  *    microprocessor devices manufactured by or for STMicroelectronics.
-  * 5. Redistribution and use of this software other than as permitted under 
-  *    this license is void and will automatically terminate your rights under 
-  *    this license. 
-  *
-  * THIS SOFTWARE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS "AS IS" 
-  * AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT 
-  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
-  * PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY
-  * RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT 
-  * SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-  * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-  * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, 
-  * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF 
-  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING 
-  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
-  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-  *
-  ******************************************************************************
-  */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f1xx_hal.h"
@@ -81,16 +33,24 @@ _Bool NormalTestFlag = 0; // =1, if normal test in progres
 
 float CoilVoltage,PWMVoltage,DifVoltage,CurrentMeas;  //Measured values float
 float CoilVoltageSetFl,PWMVoltageSetFl; 									 //Settings Value Float
+float PrevCoilVoltageSetFl=0;
+uint16_t PrevCoilVoltageSet=0;
 uint16_t CoilVoltageSet,PWMVoltageSet; 									 //Settings Value
 uint16_t CoilVoltageToSet,PWMVoltageToSet; 							 //Values to Set
 
-uint32_t adc[5],adcbuffer[5];                            //adc - measured adc 0-4w data
-
+uint32_t adc[5][101],adcbuffer[5]; //adc - measured adc 0-4w data
+float adcConverted[4],adcRaw[4];
+uint32_t adcTemperature;
 uint16_t min=5000,max=0;
 
 uint8_t ssf = 10;
+uint8_t sempIndex=0;
+
+uint8_t selfCalibration=0;
+uint8_t selfCalibCheck = 0;
 
 int temperature = 0;
+char Temp[18];
 
 /* USER CODE END PV */
 
@@ -117,17 +77,25 @@ float StrToFloat(char* Buf);
 uint16_t StrToInt(char* Buf);
 void DioOn(uint8_t DioNum);
 void RelOn(uint8_t RelNum);
-
+void DioOff(uint8_t DioNum);
+void RelOff(uint8_t RelNum);
+void ConvertData(void);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
-	for(int i=0;i<=4;i++)
-	{
- adc[i]=adcbuffer[i];
-	}
+	for(int i=0;i<=3;i++)
+		{
+		adc[i][sempIndex]=adcbuffer[i];
+		}
+	sempIndex++;
+  if (sempIndex==100)
+	 {
+		adcTemperature=adcbuffer[4];
+		sempIndex=0;
+	 }
 }
 
 /* USER CODE END 0 */
@@ -175,11 +143,11 @@ int main(void)
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
 	HAL_TIM_PWM_Start(&htim3,TIM_CHANNEL_2);
-	__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,100);
+	__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,32);
 	
 	HAL_TIM_PWM_Start(&htim1,TIM_CHANNEL_3);
-	__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,200);
-	
+	__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,0);  //350 - 13,5V if Power sourse 15V
+ 	
 	HAL_TIM_Base_Start(&htim6);
 	HAL_TIM_Base_Start_IT(&htim6);
 	
@@ -192,23 +160,18 @@ int main(void)
 	SecString();
 	LCDPrint("    Rev: 1.1    ");
 	HAL_Delay(2000);
-	LCDClear();
+	//LCDClear();
 	
 	HAL_ADC_Start_DMA(&hadc1,adcbuffer,5);
 	
-	
-	HAL_GPIO_WritePin(GPIOC, Out1_Pin, GPIO_PIN_SET);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		char Temp[16];
-		
-		
-		if(ReceivedDataFlag == 1 && NormalTestFlag == 0)
-			{
+		if(ReceivedDataFlag == 1 && selfCalibration!=1)//&& NormalTestFlag == 0		
+		{
 				__HAL_TIM_SET_COUNTER(&htim6,0);
 				if(StrCmp(ReceivedData,"Who are you")>0)
 					{
@@ -217,85 +180,168 @@ int main(void)
 					}
 				else if(StrCmp(ReceivedData,"Are you alive")>0)
 					{
+					TesterMode = 1;
 					CDC_Transmit_String("Yes,I feel good");
 					}
 				else if(StrCmp(ReceivedData,"$SetCoilVoltage")>0)
-					{
-					CoilVoltageSetFl = StrToFloat(ReceivedData); 
-					CoilVoltageSet = CoilVoltageSetFl*31;            // 31 - index, need to be changed
-					__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_1,CoilVoltageSet);
-					CDC_Transmit_String("$SetCoilVoltageOK");
+					{ 
+					CoilVoltageSetFl = StrToFloat(ReceivedData);
+					if (CoilVoltageSetFl == PrevCoilVoltageSetFl)
+						{
+						CoilVoltageSet = PrevCoilVoltageSet;
+						TesterMode = 1;
+						__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,CoilVoltageSet);
+						CDC_Transmit_String("$SetCoilVoltageOK");
+						}
+						else
+						{
+						CoilVoltageSet = CoilVoltageSetFl*15;            // 25 - index, need to be changed
+						__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,CoilVoltageSet);
+						selfCalibration = 1;
+						HAL_Delay(250);
+						}
 					}	
 				else if(StrCmp(ReceivedData,"$SetRelCurrent")>0)
 					{
 					PWMVoltageSetFl = StrToFloat(ReceivedData);      // current, not voltage
-					PWMVoltageSet = CoilVoltageSetFl*145;            // 145 - index, need to be changed
+					PWMVoltageSet = PWMVoltageSetFl*26*PWMVoltageSetFl;            // 145 - index, need to be changed
 					__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,PWMVoltageSet);
 					CDC_Transmit_String("$SetRelCurrentOK");
 					}
-				else if(StrCmp(ReceivedData,"$DioON")>0)
+				else if(StrCmp(ReceivedData,"$DIOON")>0)
 					{ 
 					DioOn(StrToInt(ReceivedData));	
-					sprintf(Temp,"$DioON%i", StrToInt(ReceivedData));	
+					sprintf(Temp,"$DIOON%u", StrToInt(ReceivedData));	
 					CDC_Transmit_String(Temp);
 					}
 				else if(StrCmp(ReceivedData,"$RelON")>0)
 					{ 
 					RelOn(StrToInt(ReceivedData));	
-					sprintf(Temp,"$RelOn%i", StrToInt(ReceivedData));	
+					sprintf(Temp,"$RelOn%u", StrToInt(ReceivedData));	
 					CDC_Transmit_String(Temp);
 					}
-				else if(StrCmp(ReceivedData,"@GetCurrent")>0)
+				else if(StrCmp(ReceivedData,"$DIOOFF")>0)
 					{ 
-					sprintf(Temp,"@GetCurrent%f", 2.1);	
+					DioOff(StrToInt(ReceivedData));	
+					sprintf(Temp,"$DIOOFF%u", StrToInt(ReceivedData));	
 					CDC_Transmit_String(Temp);
 					}
-				else if(StrCmp(ReceivedData,"@GetVoltage")>0)
+				else if(StrCmp(ReceivedData,"$RelOFF")>0)
 					{ 
-					sprintf(Temp,"@GetVoltage%f", 6.333);	
+					RelOff(StrToInt(ReceivedData));	
+					sprintf(Temp,"$RelOn%u", StrToInt(ReceivedData));	
 					CDC_Transmit_String(Temp);
-						
-					if(StrCmp(ReceivedData,"@GetVoltageON")>0)   // Turn All Dio, Relays after last step
-						{
-						AllOff();
-						}
 					}
+				else if(StrCmp(ReceivedData,"@GetCurrentOFF")>0)
+					{ 
+					ConvertData();
+					sprintf(Temp,"@CurrentOFF%.*f",4, adcConverted[3]);	
+					CDC_Transmit_String(Temp);
+					}
+				else if(StrCmp(ReceivedData,"@GetVoltageOFF")>0)
+					{
+					ConvertData();
+					sprintf(Temp,"@VoltageOFF%.*f",4, adcConverted[2]);	
+					CDC_Transmit_String(Temp);
+					}
+				else if(StrCmp(ReceivedData,"@GetCurrentON")>0)
+					{ 
+					ConvertData();
+					sprintf(Temp,"@CurrentON%.*f",4, adcConverted[3]);	
+					CDC_Transmit_String(Temp);
+					}
+				else if(StrCmp(ReceivedData,"@GetVoltageON")>0)
+					{
+					ConvertData();
+					sprintf(Temp,"@VoltageON%.*f",4, adcConverted[2]);	
+					CDC_Transmit_String(Temp);
+					}	
+				else if(StrCmp(ReceivedData,"$AllOFF")>0)   // Turn All Dio, Relays after last step
+					{
+					AllOff();
+					}
+					
 			ReceivedDataFlag = 0;
-			}
-			
-	if(TesterMode != 1)
+				}	
+
+
+		
+	if (selfCalibration == 1)
 	{
+		if ((adcConverted[0]-1) >= CoilVoltageSetFl && CoilVoltageSet > 16)
+		{
+		selfCalibCheck = 0;
+		CoilVoltageSet -= 9;
+		__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,CoilVoltageSet);
+		}
+		else if ((adcConverted[0]+1) <= CoilVoltageSetFl && CoilVoltageSet < 450)
+		{
+		selfCalibCheck = 0;
+		CoilVoltageSet += 10;
+		__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,CoilVoltageSet);
+		}
+		else if ((adcConverted[0]-0.15) >= CoilVoltageSetFl && CoilVoltageSet > 8)
+		{
+		selfCalibCheck = 0;
+		CoilVoltageSet -= 1;
+		__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,CoilVoltageSet);
+		}
+		else if ((adcConverted[0]+0.05 ) <= CoilVoltageSetFl && CoilVoltageSet < 450)
+		{
+		selfCalibCheck = 0;
+		CoilVoltageSet += 2;
+		__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,CoilVoltageSet);
+		}else if (adcConverted[0] >= (CoilVoltageSetFl - 0.06) && adcConverted[0] <= (CoilVoltageSetFl+0.16))
+		{
+		selfCalibCheck++;
+		if(selfCalibCheck == 15)
+			{
+			selfCalibCheck = 0;
+			TesterMode = 1;
+			__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,CoilVoltageSet);
+			CDC_Transmit_String("$SetCoilVoltageOK");
+			PrevCoilVoltageSet = CoilVoltageSet;
+			PrevCoilVoltageSetFl = CoilVoltageSetFl;
+			selfCalibration = 0;
+			}
+		}
+	}		
+				
+	if(TesterMode == 0)
+	{
+	ConvertData();
 	FirstString();
-	sprintf(Temp,"a2=%d", adc[2]);
+	
+	sprintf(Temp,"a2=%.*f",2, adcConverted[2]);
 	LCDPrint(Temp);
-	sprintf(Temp," a3=%d", adc[3]);
+
+	sprintf(Temp," a3=%.*f   ",2, adcConverted[3]);
 	LCDPrint(Temp);
 		
 	SecString();
-	temperature = (1750-adc[4])/5+25;
+	temperature = (1750-adcTemperature)/5+25;
 	sprintf(Temp,"%d", temperature);
 	LCDPrint(Temp);
-	sprintf(Temp," %d", adc[0]);
+		
+	sprintf(Temp," %.*f",2, adcConverted[0]);
 	LCDPrint(Temp);
-	sprintf(Temp," %d", adc[1]);
+	
+	sprintf(Temp," %.*i",2, CoilVoltageSet); //adcConverted[1]
 	LCDPrint(Temp);
-	sprintf(Temp," %d ", ssf);
-	LCDPrint(Temp);
-  HAL_Delay(750);
-	}else
-	{
-	FirstString();
-	LCDPrint("    PC  Mode    ");	
-	HAL_Delay(500);
-	}
+	
+	HAL_Delay(50);
+}
+}	
+
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
 
-  }
+  
   /* USER CODE END 3 */
 
 }
+
 
 /**
   * @brief System Clock Configuration
@@ -408,7 +454,6 @@ static void MX_ADC1_Init(void)
     */
   sConfig.Channel = ADC_CHANNEL_3;
   sConfig.Rank = ADC_REGULAR_RANK_4;
-  sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     _Error_Handler(__FILE__, __LINE__);
@@ -418,7 +463,6 @@ static void MX_ADC1_Init(void)
     */
   sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
   sConfig.Rank = ADC_REGULAR_RANK_5;
-  sConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     _Error_Handler(__FILE__, __LINE__);
@@ -673,7 +717,7 @@ for(uint16_t i = 0; i<Len;i++)
 	{
 		if (Buf[i] == IntMas[j])
 		{
-		TempInt = (TempInt*10)+IntMas[j];
+		TempInt = (TempInt*10)+j;
 		break;
 		}
 	}
@@ -699,11 +743,11 @@ for(uint16_t i = 0; i<Len;i++)
 	{
 		if (Buf[i] == IntMas[j]&& dotIndex == 0)
 		{
-		TempInt = (TempInt*10)+IntMas[j];
+		TempInt = (TempInt*10)+j;
 		break;
 		}else if (Buf[i] == IntMas[j]&& dotIndex > 0)
 		{
-		TempInt = (pow(0.1, dotIndex)*IntMas[j])+TempInt;
+		TempInt = (pow(0.1, dotIndex)*j)+TempInt;
 		dotIndex++;
 		break;
 		}
@@ -727,7 +771,8 @@ uint8_t StrCmp (char* Buf,char* cmpBuf)
 
 void AllOff(void)
 {
-DioOn(200);
+DioOff(200);
+__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_3,0);
 }
 
 
@@ -736,29 +781,51 @@ void DioOn(uint8_t DioNum)
 {
     switch (DioNum)
 		{
-			case 1:   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_SET); break; 
-			case 2:   HAL_GPIO_WritePin(GPIOC, Out2_Pin, GPIO_PIN_SET); break; 
-			case 3:   HAL_GPIO_WritePin(GPIOC, Out3_Pin, GPIO_PIN_SET); break; 
-			case 4:   HAL_GPIO_WritePin(GPIOC, Out4_Pin, GPIO_PIN_SET); break; 
-			case 5:   HAL_GPIO_WritePin(GPIOC, Out5_Pin, GPIO_PIN_SET); break; 
-			case 6:   HAL_GPIO_WritePin(GPIOC, Out6_Pin, GPIO_PIN_SET); break; 
+			case 1:   HAL_GPIO_WritePin(GPIOC, Out2_Pin, GPIO_PIN_SET); break; 
+			case 2:   HAL_GPIO_WritePin(GPIOC, Out4_Pin, GPIO_PIN_SET); break; 
+			case 3:   HAL_GPIO_WritePin(GPIOC, Out1_Pin, GPIO_PIN_SET); break; 
+			case 4:   HAL_GPIO_WritePin(GPIOC, Out3_Pin, GPIO_PIN_SET); break; 
+			case 5:   HAL_GPIO_WritePin(GPIOC, Out6_Pin, GPIO_PIN_SET); break; 
+			case 6:   HAL_GPIO_WritePin(GPIOC, Out5_Pin, GPIO_PIN_SET); break; 
 			case 7:   HAL_GPIO_WritePin(GPIOC, Out7_Pin, GPIO_PIN_SET); break; 
-			case 8:   HAL_GPIO_WritePin(GPIOB, Out8_Pin, GPIO_PIN_SET); break; 
-			case 9:   HAL_GPIO_WritePin(GPIOB, Out9_Pin, GPIO_PIN_SET); break; 
+			case 8:   HAL_GPIO_WritePin(GPIOB, Out9_Pin, GPIO_PIN_SET); break; 
+			case 9:   HAL_GPIO_WritePin(GPIOB, Out8_Pin, GPIO_PIN_SET); break; 
 			case 10:  HAL_GPIO_WritePin(GPIOC, Out10_Pin, GPIO_PIN_SET); break; 
-			case 11:  HAL_GPIO_WritePin(GPIOC, Out11_Pin, GPIO_PIN_SET); break;
-			case 12:  HAL_GPIO_WritePin(GPIOC, Out12_Pin, GPIO_PIN_SET); break; 
+			case 11:  HAL_GPIO_WritePin(GPIOC, Out12_Pin, GPIO_PIN_SET); break;
+			case 12:  HAL_GPIO_WritePin(GPIOC, Out11_Pin, GPIO_PIN_SET); break; 
 			case 13:  HAL_GPIO_WritePin(GPIOC, Out13_Pin, GPIO_PIN_SET); break;
-			case 14:  HAL_GPIO_WritePin(GPIOC, Out14_Pin, GPIO_PIN_SET); break; 
-			case 15:  HAL_GPIO_WritePin(GPIOC, Out15_Pin, GPIO_PIN_SET); break;
+			case 14:  HAL_GPIO_WritePin(GPIOC, Out15_Pin, GPIO_PIN_SET); break; 
+			case 15:  HAL_GPIO_WritePin(GPIOC, Out14_Pin, GPIO_PIN_SET); break;
 			case 16:  HAL_GPIO_WritePin(GPIOC, Out16_Pin, GPIO_PIN_SET); break;
+		}		
+}
+
+void DioOff(uint8_t DioNum)
+{
+    switch (DioNum)
+		{
+			case 1:   HAL_GPIO_WritePin(GPIOC, Out2_Pin, GPIO_PIN_RESET); break; 
+			case 2:   HAL_GPIO_WritePin(GPIOC, Out4_Pin, GPIO_PIN_RESET); break; 
+			case 3:   HAL_GPIO_WritePin(GPIOC, Out1_Pin, GPIO_PIN_RESET); break; 
+			case 4:   HAL_GPIO_WritePin(GPIOC, Out3_Pin, GPIO_PIN_RESET); break; 
+			case 5:   HAL_GPIO_WritePin(GPIOC, Out6_Pin, GPIO_PIN_RESET); break; 
+			case 6:   HAL_GPIO_WritePin(GPIOC, Out5_Pin, GPIO_PIN_RESET); break; 
+			case 7:   HAL_GPIO_WritePin(GPIOC, Out7_Pin, GPIO_PIN_RESET); break; 
+			case 8:   HAL_GPIO_WritePin(GPIOB, Out9_Pin, GPIO_PIN_RESET); break; 
+			case 9:   HAL_GPIO_WritePin(GPIOB, Out8_Pin, GPIO_PIN_RESET); break; 
+			case 10:  HAL_GPIO_WritePin(GPIOC, Out10_Pin, GPIO_PIN_RESET); break; 
+			case 11:  HAL_GPIO_WritePin(GPIOC, Out12_Pin, GPIO_PIN_RESET); break;
+			case 12:  HAL_GPIO_WritePin(GPIOC, Out11_Pin, GPIO_PIN_RESET); break; 
+			case 13:  HAL_GPIO_WritePin(GPIOC, Out13_Pin, GPIO_PIN_RESET); break;
+			case 14:  HAL_GPIO_WritePin(GPIOC, Out15_Pin, GPIO_PIN_RESET); break; 
+			case 15:  HAL_GPIO_WritePin(GPIOC, Out14_Pin, GPIO_PIN_RESET); break;
+			case 16:  HAL_GPIO_WritePin(GPIOC, Out16_Pin, GPIO_PIN_RESET); break;
 			
 			case 200: HAL_GPIO_WritePin(GPIOC, Out10_Pin|Out12_Pin|Out11_Pin|Out13_Pin // RESET ALL
-                          |Out15_Pin|Out14_Pin|Out16_Pin|GPIO_PIN_6|Out3_Pin|Out2_Pin 
+                          |Out15_Pin|Out14_Pin|Out16_Pin|Out1_Pin|Out3_Pin|Out2_Pin 
                           |Out4_Pin|Out6_Pin|Out5_Pin|Out7_Pin, GPIO_PIN_RESET); 
 								HAL_GPIO_WritePin(GPIOB, Out8_Pin|Out9_Pin, GPIO_PIN_RESET); break;
-		}
-			
+		}		
 }
 
 void RelOn(uint8_t RelNum)
@@ -775,12 +842,59 @@ void RelOn(uint8_t RelNum)
 			case 8:HAL_GPIO_WritePin(GPIOC, RelOn8_Pin, GPIO_PIN_SET); break;
 			case 9:HAL_GPIO_WritePin(GPIOA, RelOn9_Pin, GPIO_PIN_SET); break;
 			case 10:HAL_GPIO_WritePin(GPIOA, RelOn10_Pin, GPIO_PIN_SET); break;
+		}
+}
+
+void RelOff(uint8_t RelNum)
+{
+		switch (RelNum)
+		{
+			case 1:HAL_GPIO_WritePin(GPIOB, RelOn1_Pin, GPIO_PIN_RESET); break;
+			case 2:HAL_GPIO_WritePin(GPIOB, RelOn2_Pin, GPIO_PIN_RESET); break;
+			case 3:HAL_GPIO_WritePin(GPIOB, RelOn3_Pin, GPIO_PIN_RESET); break;
+			case 4:HAL_GPIO_WritePin(GPIOB, RelOn4_Pin, GPIO_PIN_RESET); break;
+			case 5:HAL_GPIO_WritePin(GPIOB, RelOn5_Pin, GPIO_PIN_RESET); break;
+			case 6:HAL_GPIO_WritePin(GPIOB, RelOn6_Pin, GPIO_PIN_RESET); break;
+			case 7:HAL_GPIO_WritePin(GPIOC, RelOn7_Pin, GPIO_PIN_RESET); break;
+			case 8:HAL_GPIO_WritePin(GPIOC, RelOn8_Pin, GPIO_PIN_RESET); break;
+			case 9:HAL_GPIO_WritePin(GPIOA, RelOn9_Pin, GPIO_PIN_RESET); break;
+			case 10:HAL_GPIO_WritePin(GPIOA, RelOn10_Pin, GPIO_PIN_RESET); break;
 			
 			case 200:HAL_GPIO_WritePin(GPIOB, RelOn5_Pin|RelOn6_Pin|RelOn3_Pin|RelOn4_Pin|RelOn1_Pin|RelOn2_Pin, GPIO_PIN_RESET); 
 							 HAL_GPIO_WritePin(GPIOC, RelOn7_Pin|RelOn8_Pin, GPIO_PIN_RESET);
 							 HAL_GPIO_WritePin(GPIOA, RelOn9_Pin|RelOn10_Pin, GPIO_PIN_RESET);break;
 		}
 }
+
+void ConvertData (void)
+{
+		adc[0][100]= adc[1][100]= adc[2][100]= adc[3][100]=0;
+
+		for(uint8_t ind = 0; ind<100;ind++)
+		 {
+			adc[0][100]= adc[0][100]+adc[0][ind];
+			adc[1][100]= adc[1][100]+adc[1][ind];
+			adc[2][100]= adc[2][100]+adc[2][ind];
+			adc[3][100]= adc[3][100]+adc[3][ind];
+		 }	
+		adcRaw[0] = (adc[0][100]/100)+40;
+		adcRaw[1] = (adc[1][100]/100)+40;
+		adcRaw[2] = adc[2][100]/100; 
+		adcRaw[3] = adc[3][100]/100;  	
+
+	
+	if(adcRaw[2]>=2500)
+	{
+	adcConverted[2] = 9.0;
+	}else
+	{
+	adcConverted[2] = adcRaw[2]/1240;
+	}
+	adcConverted[0] = adcRaw[0]/202;
+	adcConverted[1] = adcRaw[1]/202;
+	adcConverted[3] = ((3017-adcRaw[3])/230)-0.015;
+}
+
 
 /* USER CODE END 4 */
 

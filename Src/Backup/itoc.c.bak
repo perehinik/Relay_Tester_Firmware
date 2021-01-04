@@ -109,7 +109,7 @@ void LCDClear(void){
 void LCDPrint(char s[])
 	/*
 	printing string array char s[]
-	for printing other types you need to use funktion sprintf
+	for printing other types you need to use function sprintf
 				
 				#include <stdio.h>
 				char str[16];
@@ -136,7 +136,7 @@ void LCDPrint(char s[])
 		{
 			if (s[i]==' ')
 				{
-				Letter = 0x80;
+				Letter = 0x20; //can be 0x80 fo another LCD controller
 				}
 			for (uint16_t p=0;p<80;p++)
 				{
