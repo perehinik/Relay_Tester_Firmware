@@ -1,0 +1,7 @@
+itoc.c:7:6:OutByteToI2C1	24	static
+itoc.c:28:6:LCDInit	56	static
+itoc.c:51:6:SecString	8	static
+itoc.c:63:6:FirstString	8	static
+itoc.c:75:6:LCDCursorPozition	24	static
+itoc.c:96:6:LCDClear	8	static
+itoc.c:109:6:LCDPrint	320	static
